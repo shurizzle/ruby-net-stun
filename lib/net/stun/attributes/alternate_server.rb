@@ -20,20 +20,60 @@
 require 'ipaddr'
 
 module Net; class STUN; class Attributes
-  class AlternateServer < Struct.new(:port, :address)
+  class AlternateServer < IPAddr
     ADDR_FAMILY = {
       1 => Socket::AF_INET,
       2 => Socket::AF_INET6
     }.freeze
 
+    RADDR_FAMILY = {
+      Socket::AF_INET   => 1,
+      Socket::AF_INET6  => 2
+    }.freeze
+
+    attr_accessor :port
+
     def self.unpack (bytes)
-      family, port, address = bytes.unpack('xCnN')
-      new(port, IPAddr.new(address, ADDR_FAMILY[family]).to_s)
+      case bytes.bytesize
+      when 8
+        family, port, address = bytes.unpack('xCnN')
+      when 20
+        family, port, a1, a0 = bytes.unpack('xCnQQ')
+        address = (a1 << 64) | a0
+      else
+        return nil
+      end
+
+      new(address, ADDR_FAMILY[family], port)
+    end
+
+    def initialize (address, family, port)
+      super(address, family)
+      @port = port
     end
 
     def pack
-      res = [family, port, address].pack('xCnN')
+      res = if family == Socket::AF_INET6
+              a1, a0 = to_i >> 64, to_i & 0x0000000000000000FFFFFFFFFFFFFFFF
+              [RADDR_FAMILY[family], port, a1, a0].pack('xCnQQ')
+            else
+              [RADDR_FAMILY[family], port, to_i].pack('xCnN')
+            end
+
       [0x8023, res.bytesize].pack('nn') + res
+    end
+
+    def inspect
+      case family
+      when Socket::AF_INET
+        af = "IPv4"
+      when Socket::AF_INET6
+        af = "IPv6"
+      else
+        raise "unsupported address family"
+      end
+      return sprintf("#<%s: %s:%s/%s:%s>", self.class.name,
+		    af, _to_string(@addr), _to_string(@mask_addr), port.to_s)
     end
   end
 end; end; end
